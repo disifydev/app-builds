@@ -1,0 +1,38 @@
+name: ios
+on:
+  workflow_dispatch:
+    inputs:
+      ref: { description: "branch/sha of source repo", default: "main", required: true }
+permissions: {}
+concurrency: { group: ios-${{ inputs.ref }}, cancel-in-progress: true }
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Fetch source (read-only key)
+        env: { KEY: "${{ secrets.SRC_DEPLOY_KEY }}", REPO: "${{ secrets.SRC_REPO }}", REF: "${{ inputs.ref }}" }
+        run: |
+          mkdir -p ~/.ssh && printf '%s\n' "$KEY" > ~/.ssh/src && chmod 600 ~/.ssh/src
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/src" git clone -q --depth 1 --branch "$REF" "git@github.com:$REPO.git" src 2>/dev/null || { GIT_SSH_COMMAND="ssh -i ~/.ssh/src" git clone -q "git@github.com:$REPO.git" src && git -C src checkout -q "$REF"; }
+          rm -f ~/.ssh/src
+      - name: Build and test
+        working-directory: src/ios
+        run: |
+          brew install xcodegen >/dev/null
+          xcodegen generate >/dev/null
+          set -o pipefail
+          xcodebuild -scheme KseniaApp -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath ../../dd build test 2>&1 | grep -E "error:|warning: .*Swift 6|\*\* (BUILD|TEST)|Test Suite|failed|passed" | tail -200
+      - name: Encrypt app
+        if: always()
+        env: { PASS: "${{ secrets.ARTIFACT_PASS }}" }
+        run: |
+          app=$(find dd/Build/Products -name "*.app" -maxdepth 3 | head -1); [ -n "$app" ] || exit 0
+          ditto -c -k --keepParent "$app" app.zip && openssl enc -aes-256-cbc -pbkdf2 -salt -in app.zip -out app.zip.enc -pass env:PASS && rm app.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: ios-sim-app, path: app.zip.enc, retention-days: 1, if-no-files-found: ignore }
+      - name: Clean
+        if: always()
+        run: rm -rf src dd
