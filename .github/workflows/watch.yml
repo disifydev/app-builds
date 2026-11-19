@@ -1,0 +1,23 @@
+name: watch
+# Every 15 min: any new commit on any branch of the source repo -> ios + android builds (anyone who pushes triggers a build).
+on:
+  schedule: [{ cron: "*/15 * * * *" }]
+  workflow_dispatch:
+permissions: { actions: write }
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env: { KEY: "${{ secrets.SRC_DEPLOY_KEY }}", REPO: "${{ secrets.SRC_REPO }}", GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" }
+        run: |
+          mkdir -p ~/.ssh && printf '%s\n' "$KEY" > ~/.ssh/src && chmod 600 ~/.ssh/src
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          heads=$(GIT_SSH_COMMAND="ssh -i ~/.ssh/src" git ls-remote --heads "git@github.com:$REPO.git" | awk '{print $1}' | sort -u) || exit 0
+          rm -f ~/.ssh/src
+          done_titles=$(gh run list --limit 200 --json displayTitle -q '.[].displayTitle')
+          for sha in $heads; do
+            for wf in ios android; do
+              grep -qx "$wf $sha" <<<"$done_titles" || { echo "build $wf $sha"; gh workflow run $wf.yml -f ref=$sha; }
+            done
+          done

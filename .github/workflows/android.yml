@@ -1,4 +1,5 @@
 name: android
+run-name: android ${{ inputs.ref }}
 on:
   workflow_dispatch:
     inputs:
